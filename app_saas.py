@@ -95,6 +95,84 @@ def canjear_codigo_por_token(codigo):
         return {"ok": False, "error": f"Error inesperado: {str(e)}"}
 
 
+def refrescar_token(refresh_token_actual):
+    """Usa el refresh_token para obtener un nuevo access_token."""
+    try:
+        respuesta = requests.post("https://api.mercadolibre.com/oauth/token", data={
+            "grant_type": "refresh_token",
+            "client_id": ML_CLIENT_ID,
+            "client_secret": ML_CLIENT_SECRET,
+            "refresh_token": refresh_token_actual,
+        }, timeout=15)
+        
+        datos = respuesta.json()
+        
+        if "access_token" in datos:
+            return {"ok": True, "datos": datos}
+        elif "error" in datos:
+            return {"ok": False, "error": datos.get("message", datos.get("error", "Error al renovar"))}
+        else:
+            return {"ok": False, "error": "Respuesta inesperada al renovar token"}
+    
+    except Exception as e:
+        return {"ok": False, "error": f"Error al renovar: {str(e)}"}
+
+
+def verificar_y_renovar_token(user_id):
+    """Verifica si el token expiró y lo renueva si es necesario.
+    Retorna el token activo (dict) o None si no hay token."""
+    db = get_db()
+    token = obtener_token_ml(db, user_id)
+    
+    if not token:
+        db.close()
+        return None  # No hay token guardado
+    
+    ahora = datetime.now().timestamp()
+    expira_en = float(token.get("expires_at", 0))
+    
+    # Si expira en menos de 5 minutos, renovamos
+    if expira_en - ahora < 300:
+        resultado = refrescar_token(token["refresh_token"])
+        
+        if resultado["ok"]:
+            datos = resultado["datos"]
+            nuevo_expira = ahora + datos.get("expires_in", 21600)
+            
+            guardar_token_ml(
+                db,
+                user_id,
+                access_token=datos["access_token"],
+                refresh_token=datos.get("refresh_token", token["refresh_token"]),
+                ml_user_id=token.get("ml_user_id", ""),
+                expires_at=str(nuevo_expira),
+            )
+            token["access_token"] = datos["access_token"]
+            token["refresh_token"] = datos.get("refresh_token", token["refresh_token"])
+            token["expires_at"] = str(nuevo_expira)
+    
+    db.close()
+    return token
+
+
+def token_expira_en_texto(expires_at_str):
+    """Convierte expires_at a texto legible (ej: 'en 3 horas')."""
+    try:
+        expira = float(expires_at_str)
+        ahora = datetime.now().timestamp()
+        segundos = expira - ahora
+        
+        if segundos <= 0:
+            return "EXPIRADO"
+        elif segundos < 3600:
+            return f"en {int(segundos/60)} minutos"
+        elif segundos < 86400:
+            return f"en {int(segundos/3600)} horas"
+        else:
+            return f"en {int(segundos/86400)} días"
+    except:
+        return "desconocido"
+
 # ============================================================
 # ESTILOS CSS
 # ============================================================
@@ -268,22 +346,32 @@ def seccion_conexion_ml(usuario):
     
     if token:
         # ─── YA ESTA CONECTADO ───
-        st.success("✅ Tu cuenta de MercadoLibre está conectada")
+        # Verificar si el token está vigente y renovar si es necesario
+        with st.spinner("Verificando conexión..."):
+            token_activo = verificar_y_renovar_token(usuario["id"])
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("ID Vendedor", token.get("ml_user_id", "—"))
-        with col2:
-            st.metric("Expira", token.get("expires_at", "—"))
-        with col3:
-            if st.button("🔌 Desconectar", use_container_width=True):
-                db = get_db()
-                cursor = db.cursor()
-                cursor.execute("DELETE FROM tokens_ml WHERE user_id = ?", (usuario["id"],))
-                db.commit()
-                db.close()
-                st.success("✅ MercadoLibre desconectado")
-                st.rerun()
+        if token_activo:
+            expira_texto = token_expira_en_texto(token_activo.get("expires_at", "0"))
+            
+            st.success("✅ Tu cuenta de MercadoLibre está conectada")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("ID Vendedor", token_activo.get("ml_user_id", "—"))
+            with col2:
+                st.metric("Renovación automática", f"✅ {expira_texto}")
+            with col3:
+                if st.button("🔌 Desconectar", use_container_width=True):
+                    db = get_db()
+                    cursor = db.cursor()
+                    cursor.execute("DELETE FROM tokens_ml WHERE user_id = ?", (usuario["id"],))
+                    db.commit()
+                    db.close()
+                    st.success("✅ MercadoLibre desconectado")
+                    st.rerun()
+        else:
+            st.error("❌ El token expiró y no se pudo renovar. Conecta de nuevo.")
+            # Caemos al flujo de reconexión
     
     else:
         # ─── NO CONECTADO: mostrar paso a paso ───
