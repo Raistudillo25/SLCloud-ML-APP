@@ -96,6 +96,74 @@ def crear_tablas():
     db.close()
 
 
+def crear_tablas_ml():
+    """Crea tablas para datos sincronizados de ML."""
+    db = get_db()
+    cursor = db.cursor()
+    
+    # --- PRODUCTOS DESCARGADOS DE ML ---
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS productos_ml (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            item_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            price REAL DEFAULT 0,
+            available_quantity INTEGER DEFAULT 0,
+            condition TEXT DEFAULT 'new',
+            average_rating REAL DEFAULT 0,
+            rating_count INTEGER DEFAULT 0,
+            permalink TEXT DEFAULT '',
+            sincronizado_en TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES usuarios(id)
+        )
+    """)
+    
+    # --- VENTAS DESCARGADAS DE ML ---
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ventas_ml (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            order_id TEXT NOT NULL,
+            item_id TEXT DEFAULT '',
+            item_title TEXT DEFAULT '',
+            quantity INTEGER DEFAULT 0,
+            unit_price REAL DEFAULT 0,
+            total_amount REAL DEFAULT 0,
+            commission REAL DEFAULT 0,
+            shipping_cost REAL DEFAULT 0,
+            date_created TEXT DEFAULT '',
+            status TEXT DEFAULT '',
+            sincronizado_en TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES usuarios(id)
+        )
+    """)
+    
+    # --- ACTUALIZAR tabla costos: SKU opcional ---
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS costos_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            sku TEXT DEFAULT '',
+            nombre_producto TEXT NOT NULL,
+            costo_unitario REAL NOT NULL,
+            categoria TEXT DEFAULT '',
+            proveedor TEXT DEFAULT '',
+            FOREIGN KEY (user_id) REFERENCES usuarios(id)
+        )
+    """)
+    # Migrar datos si existen
+    cursor.execute("""
+        INSERT OR IGNORE INTO costos_v2 (id, user_id, sku, nombre_producto, costo_unitario, categoria, proveedor)
+        SELECT id, user_id, sku, nombre_producto, costo_unitario, categoria, proveedor FROM costos
+    """)
+    cursor.execute("DROP TABLE IF EXISTS costos")
+    cursor.execute("ALTER TABLE costos_v2 RENAME TO costos")
+    
+    db.commit()
+    db.close()
+
+
 # ============================================================
 # FUNCIONES DE USUARIO
 # ============================================================
@@ -222,3 +290,96 @@ def obtener_costos_usuario(db, user_id):
         (user_id,),
     ).fetchall()
     return [dict(f) for f in filas]
+
+
+# ============================================================
+# FUNCIONES DE DATOS SINCRONIZADOS DE ML
+# ============================================================
+def guardar_productos_ml(db, user_id, productos):
+    """Guarda productos descargados de ML (reemplaza anteriores)."""
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM productos_ml WHERE user_id = ?", (user_id,))
+    
+    for p in productos:
+        cursor.execute("""
+            INSERT INTO productos_ml 
+            (user_id, item_id, title, price, available_quantity, condition, 
+             average_rating, rating_count, permalink, sincronizado_en)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            p.get("id", ""),
+            p.get("title", ""),
+            float(p.get("price", 0)),
+            int(p.get("available_quantity", 0)),
+            p.get("condition", "new"),
+            float(p.get("average_rating", 0)),
+            int(p.get("rating_count", 0)),
+            p.get("permalink", ""),
+            ahora,
+        ))
+    
+    db.commit()
+    return len(productos)
+
+
+def obtener_productos_ml(db, user_id):
+    """Obtiene los productos ML guardados de un usuario."""
+    cursor = db.cursor()
+    filas = cursor.execute(
+        "SELECT * FROM productos_ml WHERE user_id = ? ORDER BY title",
+        (user_id,),
+    ).fetchall()
+    return [dict(f) for f in filas]
+
+
+def guardar_ventas_ml(db, user_id, ventas):
+    """Guarda ventas descargadas de ML (reemplaza anteriores)."""
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM ventas_ml WHERE user_id = ?", (user_id,))
+    
+    for v in ventas:
+        cursor.execute("""
+            INSERT INTO ventas_ml 
+            (user_id, order_id, item_id, item_title, quantity, unit_price,
+             total_amount, commission, shipping_cost, date_created, status, sincronizado_en)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            v.get("order_id", ""),
+            v.get("item_id", ""),
+            v.get("item_title", ""),
+            int(v.get("quantity", 0)),
+            float(v.get("unit_price", 0)),
+            float(v.get("total_amount", 0)),
+            float(v.get("commission", 0)),
+            float(v.get("shipping_cost", 0)),
+            v.get("date_created", ""),
+            v.get("status", ""),
+            ahora,
+        ))
+    
+    db.commit()
+    return len(ventas)
+
+
+def obtener_ventas_ml(db, user_id):
+    """Obtiene las ventas ML guardadas de un usuario."""
+    cursor = db.cursor()
+    filas = cursor.execute(
+        "SELECT * FROM ventas_ml WHERE user_id = ? ORDER BY date_created DESC",
+        (user_id,),
+    ).fetchall()
+    return [dict(f) for f in filas]
+
+
+def ultima_sincronizacion(db, user_id):
+    """Obtiene la fecha de la ultima sincronizacion."""
+    cursor = db.cursor()
+    result = cursor.execute(
+        "SELECT MAX(sincronizado_en) as ultima FROM productos_ml WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    return result["ultima"] if result and result["ultima"] else None
