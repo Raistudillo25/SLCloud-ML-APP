@@ -96,6 +96,11 @@ def crear_tablas():
             ultimo_login TEXT DEFAULT ''
         )
     """)
+    # Migración: agregar ultimo_login si la tabla ya existía sin esa columna
+    try:
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN ultimo_login TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # La columna ya existe, ignorar
 
     # --- TOKENS DE MERCADOLIBRE (1 por usuario) ---
     cursor.execute("""
