@@ -58,8 +58,14 @@ def decrypt_token(encrypted_text):
 # ============================================================
 # UBICACION DE LA BASE DE DATOS
 # ============================================================
-# En Streamlit Cloud: se crea en el mismo directorio que los scripts
-DB_PATH = os.path.join(os.path.dirname(__file__), "saas_ml.db")
+# Streamlit Cloud: el directorio del proyecto es SOLO LECTURA.
+# Usamos /tmp/ que es el único directorio writable en la nube.
+# En desarrollo local se usa el directorio del proyecto.
+import tempfile
+if os.path.isdir("/tmp"):
+    DB_PATH = os.path.join(tempfile.gettempdir(), "saas_ml.db")
+else:
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saas_ml.db")
 DB_PATH = os.path.abspath(DB_PATH)
 
 
@@ -150,7 +156,7 @@ def crear_tablas_ml():
     """Crea tablas para datos sincronizados de ML."""
     db = get_db()
     cursor = db.cursor()
-    
+
     # --- PRODUCTOS DESCARGADOS DE ML ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS productos_ml (
@@ -168,7 +174,7 @@ def crear_tablas_ml():
             FOREIGN KEY (user_id) REFERENCES usuarios(id)
         )
     """)
-    
+
     # --- VENTAS DESCARGADAS DE ML ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS ventas_ml (
@@ -188,28 +194,34 @@ def crear_tablas_ml():
             FOREIGN KEY (user_id) REFERENCES usuarios(id)
         )
     """)
-    
+
     # --- ACTUALIZAR tabla costos: SKU opcional ---
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS costos_v2 (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            sku TEXT DEFAULT '',
-            nombre_producto TEXT NOT NULL,
-            costo_unitario REAL NOT NULL,
-            categoria TEXT DEFAULT '',
-            proveedor TEXT DEFAULT '',
-            FOREIGN KEY (user_id) REFERENCES usuarios(id)
-        )
-    """)
-    # Migrar datos si existen
-    cursor.execute("""
-        INSERT OR IGNORE INTO costos_v2 (id, user_id, sku, nombre_producto, costo_unitario, categoria, proveedor)
-        SELECT id, user_id, sku, nombre_producto, costo_unitario, categoria, proveedor FROM costos
-    """)
-    cursor.execute("DROP TABLE IF EXISTS costos")
-    cursor.execute("ALTER TABLE costos_v2 RENAME TO costos")
-    
+    # Migración segura: solo si la tabla costos vieja existe
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS costos_v2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                sku TEXT DEFAULT '',
+                nombre_producto TEXT NOT NULL,
+                costo_unitario REAL NOT NULL,
+                categoria TEXT DEFAULT '',
+                proveedor TEXT DEFAULT '',
+                FOREIGN KEY (user_id) REFERENCES usuarios(id)
+            )
+        """)
+        # Verificar si hay datos que migrar
+        count = cursor.execute("SELECT COUNT(*) FROM costos").fetchone()[0]
+        if count > 0:
+            cursor.execute("""
+                INSERT OR IGNORE INTO costos_v2 (id, user_id, sku, nombre_producto, costo_unitario, categoria, proveedor)
+                SELECT id, user_id, sku, nombre_producto, costo_unitario, categoria, proveedor FROM costos
+            """)
+            cursor.execute("DROP TABLE IF EXISTS costos")
+            cursor.execute("ALTER TABLE costos_v2 RENAME TO costos")
+    except sqlite3.OperationalError:
+        pass  # Tabla no existe o ya migrada
+
     db.commit()
     db.close()
 
