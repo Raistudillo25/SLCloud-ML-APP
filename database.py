@@ -41,7 +41,9 @@ def _build_conn_string():
         user = "postgres"
         password = "Totito2504."
 
-    return f"host={host} port={port} dbname={dbname} user={user} password={password}"
+    # URI con sslmode=require (obligatorio para Supabase)
+    # El URI evade problemas de IPv6 en Streamlit Cloud
+    return f"postgresql://{user}:{password}@{host}:{port}/{dbname}?sslmode=require"
 
 import bcrypt
 
