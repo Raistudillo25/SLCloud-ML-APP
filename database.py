@@ -1,7 +1,7 @@
 """
 BASE DE DATOS SAAS - Vendedores MercadoLibre
 ============================================
-SQLite - un solo archivo .db para todos los clientes.
+PostgreSQL (Supabase) - datos persistentes en la nube.
 Cada cliente tiene sus datos aislados por user_id.
 
 USO:
@@ -10,19 +10,40 @@ USO:
     db = get_db()
     crear_usuario(db, email, password, empresa, nombre)
     usuario = verificar_login(db, email, password)
-
-NOTA PARA STREAMLIT CLOUD:
-    SQLite en la nube es efímero — los datos se pierden cuando la app
-    se reinicia (cada deploy o tras inactividad prolongada).
-    Para datos persistentes reales, migrar a PostgreSQL (Supabase gratis).
 """
 
-import sqlite3
-import bcrypt
 import os
 import hashlib
 import base64
 from datetime import datetime
+import psycopg2
+
+# ============================================================
+# CONEXION A POSTGRESQL (Supabase)
+# ============================================================
+# Vienen de las variables de entorno en Streamlit Cloud
+# o de un archivo .env en desarrollo local.
+
+def _build_conn_string():
+    """Construye el string de conexión desde variables de entorno."""
+    # En Streamlit Cloud, las pones en Settings → Secrets
+    # En local, se leen de os.environ o de .env
+    host = os.environ.get("SUPABASE_HOST", "")
+    port = os.environ.get("SUPABASE_PORT", "5432")
+    dbname = os.environ.get("SUPABASE_DB", "postgres")
+    user = os.environ.get("SUPABASE_USER", "postgres")
+    password = os.environ.get("SUPABASE_PASSWORD", "")
+
+    # Si no hay variables de entorno, usar valores directos (fallback)
+    if not host:
+        host = "db.xrmbtpdyupfkgzbopibk.supabase.co"
+        dbname = "postgres"
+        user = "postgres"
+        password = "Totito2504."
+
+    return f"host={host} port={port} dbname={dbname} user={user} password={password}"
+
+import bcrypt
 
 # ============================================================
 # CLAVE PARA ENCRIPTAR TOKENS ML EN LA BD
@@ -56,28 +77,18 @@ def decrypt_token(encrypted_text):
         return ""
 
 # ============================================================
-# UBICACION DE LA BASE DE DATOS
-# ============================================================
-# Streamlit Cloud: el directorio del proyecto es SOLO LECTURA.
-# Usamos /tmp/ que es el único directorio writable en la nube.
-# En desarrollo local se usa el directorio del proyecto.
-import tempfile
-if os.path.isdir("/tmp"):
-    DB_PATH = os.path.join(tempfile.gettempdir(), "saas_ml.db")
-else:
-    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saas_ml.db")
-DB_PATH = os.path.abspath(DB_PATH)
-
-
-# ============================================================
 # CONEXION
 # ============================================================
 def get_db():
-    """Abre conexion a la base de datos.
+    """Abre conexion a PostgreSQL (Supabase).
     Siempre llama a esta funcion, no crees conexiones directas."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # para acceder por nombre de columna
-    conn.execute("PRAGMA journal_mode=DELETE")  # modo simple, el .db siempre tiene todos los datos
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    conn = psycopg2.connect(
+        _build_conn_string(),
+        cursor_factory=RealDictCursor
+    )
+    conn.autocommit = False
     return conn
 
 
@@ -93,8 +104,8 @@ def crear_tablas():
     # --- USUARIOS ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
+            id SERIAL PRIMARY KEY,
+            email VARCHAR(255) UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             empresa TEXT DEFAULT '',
             nombre TEXT DEFAULT '',
@@ -102,16 +113,11 @@ def crear_tablas():
             ultimo_login TEXT DEFAULT ''
         )
     """)
-    # Migración: agregar ultimo_login si la tabla ya existía sin esa columna
-    try:
-        cursor.execute("ALTER TABLE usuarios ADD COLUMN ultimo_login TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass  # La columna ya existe, ignorar
 
     # --- TOKENS DE MERCADOLIBRE (1 por usuario) ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tokens_ml (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL UNIQUE,
             access_token TEXT NOT NULL,
             refresh_token TEXT NOT NULL,
@@ -126,7 +132,7 @@ def crear_tablas():
     # --- COSTOS DE PRODUCTOS (muchos por usuario) ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS costos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             sku TEXT DEFAULT '',
             nombre_producto TEXT NOT NULL,
@@ -140,7 +146,7 @@ def crear_tablas():
     # --- INTENTOS DE LOGIN (control anti-fuerza bruta) ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS login_attempts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             email TEXT NOT NULL,
             intentos INTEGER DEFAULT 0,
             ultimo_intento TEXT,
@@ -160,7 +166,7 @@ def crear_tablas_ml():
     # --- PRODUCTOS DESCARGADOS DE ML ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS productos_ml (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             item_id TEXT NOT NULL,
             title TEXT NOT NULL,
@@ -178,7 +184,7 @@ def crear_tablas_ml():
     # --- VENTAS DESCARGADAS DE ML ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS ventas_ml (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             order_id TEXT NOT NULL,
             item_id TEXT DEFAULT '',
@@ -194,33 +200,6 @@ def crear_tablas_ml():
             FOREIGN KEY (user_id) REFERENCES usuarios(id)
         )
     """)
-
-    # --- ACTUALIZAR tabla costos: SKU opcional ---
-    # Migración segura: solo si la tabla costos vieja existe
-    try:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS costos_v2 (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                sku TEXT DEFAULT '',
-                nombre_producto TEXT NOT NULL,
-                costo_unitario REAL NOT NULL,
-                categoria TEXT DEFAULT '',
-                proveedor TEXT DEFAULT '',
-                FOREIGN KEY (user_id) REFERENCES usuarios(id)
-            )
-        """)
-        # Verificar si hay datos que migrar
-        count = cursor.execute("SELECT COUNT(*) FROM costos").fetchone()[0]
-        if count > 0:
-            cursor.execute("""
-                INSERT OR IGNORE INTO costos_v2 (id, user_id, sku, nombre_producto, costo_unitario, categoria, proveedor)
-                SELECT id, user_id, sku, nombre_producto, costo_unitario, categoria, proveedor FROM costos
-            """)
-            cursor.execute("DROP TABLE IF EXISTS costos")
-            cursor.execute("ALTER TABLE costos_v2 RENAME TO costos")
-    except sqlite3.OperationalError:
-        pass  # Tabla no existe o ya migrada
 
     db.commit()
     db.close()
@@ -249,15 +228,18 @@ def crear_usuario(db, email, password, empresa="", nombre=""):
         cursor = db.cursor()
         cursor.execute(
             "INSERT INTO usuarios (email, password_hash, empresa, nombre, fecha_registro) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (email, password_hash, empresa, nombre, fecha),
         )
+        user_id = cursor.fetchone()["id"]
         db.commit()
-        return dict(cursor.execute(
-            "SELECT id, email, empresa, nombre, fecha_registro FROM usuarios WHERE id = ?",
-            (cursor.lastrowid,)
-        ).fetchone())
-    except sqlite3.IntegrityError:
+        cursor.execute(
+            "SELECT id, email, empresa, nombre, fecha_registro FROM usuarios WHERE id = %s",
+            (user_id,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except psycopg2.IntegrityError:
         return None  # email ya existe
 
 
@@ -275,9 +257,10 @@ def verificar_login(db, email, password):
     cursor = db.cursor()
     
     # 2. Buscar usuario por email
-    usuario = cursor.execute(
-        "SELECT * FROM usuarios WHERE email = ?", (email,)
-    ).fetchone()
+    cursor.execute(
+        "SELECT * FROM usuarios WHERE email = %s", (email,)
+    )
+    usuario = cursor.fetchone()
     
     if not usuario:
         # Email no existe → registrar intento fallido igual
@@ -295,7 +278,7 @@ def verificar_login(db, email, password):
             # Migrar a bcrypt
             nuevo_hash = _hash_password(password)
             cursor.execute(
-                "UPDATE usuarios SET password_hash = ? WHERE id = ?",
+                "UPDATE usuarios SET password_hash = %s WHERE id = %s",
                 (nuevo_hash, usuario["id"]),
             )
             db.commit()
@@ -308,7 +291,7 @@ def verificar_login(db, email, password):
         resetear_intentos(db, email)
         # Guardar última conexión
         ahora_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("UPDATE usuarios SET ultimo_login = ? WHERE id = ?",
+        cursor.execute("UPDATE usuarios SET ultimo_login = %s WHERE id = %s",
                        (ahora_str, usuario["id"]))
         db.commit()
         usuario = dict(usuario)
@@ -332,9 +315,11 @@ def verificar_bloqueo(db, email):
     from datetime import datetime
     ahora = datetime.now()
     
-    registro = db.execute(
-        "SELECT * FROM login_attempts WHERE email = ?", (email,)
-    ).fetchone()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT * FROM login_attempts WHERE email = %s", (email,)
+    )
+    registro = cur.fetchone()
     
     if not registro:
         return False, 0  # Nunca ha intentado, no hay bloqueo
@@ -350,7 +335,7 @@ def verificar_bloqueo(db, email):
             return True, minutos + 1
         else:
             # Ya pasó el bloqueo, limpiar
-            db.execute("DELETE FROM login_attempts WHERE email = ?", (email,))
+            db.cursor().execute("DELETE FROM login_attempts WHERE email = %s", (email,))
             db.commit()
             return False, 0
     except:
@@ -363,30 +348,32 @@ def registrar_intento_fallido(db, email):
     ahora = datetime.now()
     ahora_str = ahora.strftime("%Y-%m-%d %H:%M:%S")
     
-    registro = db.execute(
-        "SELECT * FROM login_attempts WHERE email = ?", (email,)
-    ).fetchone()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT * FROM login_attempts WHERE email = %s", (email,)
+    )
+    registro = cur.fetchone()
     
     if registro:
         nuevos = registro["intentos"] + 1
         if nuevos >= 3:
             # Bloquear por 15 minutos
             bloqueo = (ahora + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
-            db.execute("""
+            db.cursor().execute("""
                 UPDATE login_attempts 
-                SET intentos = ?, ultimo_intento = ?, bloqueado_hasta = ?
-                WHERE email = ?
+                SET intentos = %s, ultimo_intento = %s, bloqueado_hasta = %s
+                WHERE email = %s
             """, (nuevos, ahora_str, bloqueo, email))
         else:
-            db.execute("""
+            db.cursor().execute("""
                 UPDATE login_attempts 
-                SET intentos = ?, ultimo_intento = ?
-                WHERE email = ?
+                SET intentos = %s, ultimo_intento = %s
+                WHERE email = %s
             """, (nuevos, ahora_str, email))
     else:
-        db.execute("""
+        db.cursor().execute("""
             INSERT INTO login_attempts (email, intentos, ultimo_intento)
-            VALUES (?, 1, ?)
+            VALUES (%s, 1, %s)
         """, (email, ahora_str))
     
     db.commit()
@@ -394,15 +381,17 @@ def registrar_intento_fallido(db, email):
 
 def resetear_intentos(db, email):
     """Limpia los intentos fallidos tras un login exitoso."""
-    db.execute("DELETE FROM login_attempts WHERE email = ?", (email,))
+    db.cursor().execute("DELETE FROM login_attempts WHERE email = %s", (email,))
     db.commit()
 
 
 def obtener_intentos_restantes(db, email):
     """Retorna cuántos intentos quedan antes del bloqueo."""
-    registro = db.execute(
-        "SELECT intentos FROM login_attempts WHERE email = ?", (email,)
-    ).fetchone()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT intentos FROM login_attempts WHERE email = %s", (email,)
+    )
+    registro = cur.fetchone()
     if registro:
         return max(0, 3 - registro["intentos"])
     return 3  # Aún no ha fallado, tiene 3 intentos
@@ -412,7 +401,7 @@ def obtener_usuario_por_id(db, user_id):
     """Obtiene datos de un usuario por su ID."""
     cursor = db.cursor()
     usuario = cursor.execute(
-        "SELECT id, email, empresa, nombre, fecha_registro FROM usuarios WHERE id = ?",
+        "SELECT id, email, empresa, nombre, fecha_registro FROM usuarios WHERE id = %s",
         (user_id,),
     ).fetchone()
     return dict(usuario) if usuario else None
@@ -431,21 +420,21 @@ def guardar_token_ml(db, user_id, access_token, refresh_token, ml_user_id="", ex
     enc_refresh = encrypt_token(refresh_token)
     
     existe = cursor.execute(
-        "SELECT id FROM tokens_ml WHERE user_id = ?", (user_id,)
+        "SELECT id FROM tokens_ml WHERE user_id = %s", (user_id,)
     ).fetchone()
     
     if existe:
         cursor.execute("""
             UPDATE tokens_ml 
-            SET access_token = ?, refresh_token = ?, ml_user_id = ?,
-                expires_at = ?, actualizado_en = ?
-            WHERE user_id = ?
+            SET access_token = %s, refresh_token = %s, ml_user_id = %s,
+                expires_at = %s, actualizado_en = %s
+            WHERE user_id = %s
         """, (enc_access, enc_refresh, ml_user_id, expires_at, ahora, user_id))
     else:
         cursor.execute("""
             INSERT INTO tokens_ml 
             (user_id, access_token, refresh_token, ml_user_id, expires_at, creado_en, actualizado_en)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (user_id, enc_access, enc_refresh, ml_user_id, expires_at, ahora, ahora))
     
     db.commit()
@@ -455,7 +444,7 @@ def obtener_token_ml(db, user_id):
     """Obtiene el token ML de un usuario (desencriptado)."""
     cursor = db.cursor()
     token = cursor.execute(
-        "SELECT * FROM tokens_ml WHERE user_id = ?", (user_id,)
+        "SELECT * FROM tokens_ml WHERE user_id = %s", (user_id,)
     ).fetchone()
     
     if not token:
@@ -476,13 +465,13 @@ def guardar_costos(db, user_id, df_costos):
     Elimina los anteriores y pone los nuevos (reemplazo total)."""
     cursor = db.cursor()
     # Eliminar costos anteriores
-    cursor.execute("DELETE FROM costos WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM costos WHERE user_id = %s", (user_id,))
     
     # Insertar nuevos
     for _, row in df_costos.iterrows():
         cursor.execute("""
             INSERT INTO costos (user_id, sku, nombre_producto, costo_unitario, categoria, proveedor)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """, (
             user_id,
             row.get("sku_producto", ""),
@@ -499,7 +488,7 @@ def obtener_costos_usuario(db, user_id):
     """Obtiene los costos de un usuario como lista de diccionarios."""
     cursor = db.cursor()
     filas = cursor.execute(
-        "SELECT sku, nombre_producto, costo_unitario, categoria, proveedor FROM costos WHERE user_id = ?",
+        "SELECT sku, nombre_producto, costo_unitario, categoria, proveedor FROM costos WHERE user_id = %s",
         (user_id,),
     ).fetchall()
     return [dict(f) for f in filas]
@@ -512,14 +501,14 @@ def guardar_productos_ml(db, user_id, productos):
     """Guarda productos descargados de ML (reemplaza anteriores)."""
     ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor = db.cursor()
-    cursor.execute("DELETE FROM productos_ml WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM productos_ml WHERE user_id = %s", (user_id,))
     
     for p in productos:
         cursor.execute("""
             INSERT INTO productos_ml 
             (user_id, item_id, title, price, available_quantity, condition, 
              average_rating, rating_count, permalink, sincronizado_en)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             user_id,
             p.get("id", ""),
@@ -541,7 +530,7 @@ def obtener_productos_ml(db, user_id):
     """Obtiene los productos ML guardados de un usuario."""
     cursor = db.cursor()
     filas = cursor.execute(
-        "SELECT * FROM productos_ml WHERE user_id = ? ORDER BY title",
+        "SELECT * FROM productos_ml WHERE user_id = %s ORDER BY title",
         (user_id,),
     ).fetchall()
     return [dict(f) for f in filas]
@@ -551,14 +540,14 @@ def guardar_ventas_ml(db, user_id, ventas):
     """Guarda ventas descargadas de ML (reemplaza anteriores)."""
     ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor = db.cursor()
-    cursor.execute("DELETE FROM ventas_ml WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM ventas_ml WHERE user_id = %s", (user_id,))
     
     for v in ventas:
         cursor.execute("""
             INSERT INTO ventas_ml 
             (user_id, order_id, item_id, item_title, quantity, unit_price,
              total_amount, commission, shipping_cost, date_created, status, sincronizado_en)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             user_id,
             v.get("order_id", ""),
@@ -582,7 +571,7 @@ def obtener_ventas_ml(db, user_id):
     """Obtiene las ventas ML guardadas de un usuario."""
     cursor = db.cursor()
     filas = cursor.execute(
-        "SELECT * FROM ventas_ml WHERE user_id = ? ORDER BY date_created DESC",
+        "SELECT * FROM ventas_ml WHERE user_id = %s ORDER BY date_created DESC",
         (user_id,),
     ).fetchall()
     return [dict(f) for f in filas]
@@ -592,7 +581,7 @@ def ultima_sincronizacion(db, user_id):
     """Obtiene la fecha de la ultima sincronizacion."""
     cursor = db.cursor()
     result = cursor.execute(
-        "SELECT MAX(sincronizado_en) as ultima FROM productos_ml WHERE user_id = ?",
+        "SELECT MAX(sincronizado_en) as ultima FROM productos_ml WHERE user_id = %s",
         (user_id,),
     ).fetchone()
     return result["ultima"] if result and result["ultima"] else None
