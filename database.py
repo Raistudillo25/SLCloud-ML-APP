@@ -18,9 +18,42 @@ NOTA PARA STREAMLIT CLOUD:
 """
 
 import sqlite3
-import hashlib
+import bcrypt
 import os
+import hashlib
+import base64
 from datetime import datetime
+
+# ============================================================
+# CLAVE PARA ENCRIPTAR TOKENS ML EN LA BD
+# ============================================================
+# Clave fija derivada del proyecto. Los tokens se guardan cifrados.
+_FERNET_KEY = None
+
+def _get_fernet():
+    """Obtiene el objeto Fernet para encriptar/desencriptar tokens."""
+    global _FERNET_KEY
+    if _FERNET_KEY is None:
+        from cryptography.fernet import Fernet
+        seed = "z1icamOFSIagMoEusORZ9cA2nud10pq2_ASTUM_2026"
+        key_bytes = hashlib.sha256(seed.encode()).digest()  # 32 bytes
+        _FERNET_KEY = Fernet(base64.urlsafe_b64encode(key_bytes))
+    return _FERNET_KEY
+
+
+def encrypt_token(plain_text):
+    if not plain_text:
+        return ""
+    return _get_fernet().encrypt(plain_text.encode()).decode()
+
+
+def decrypt_token(encrypted_text):
+    if not encrypted_text:
+        return ""
+    try:
+        return _get_fernet().decrypt(encrypted_text.encode()).decode()
+    except Exception:
+        return ""
 
 # ============================================================
 # UBICACION DE LA BASE DE DATOS
@@ -59,7 +92,8 @@ def crear_tablas():
             password_hash TEXT NOT NULL,
             empresa TEXT DEFAULT '',
             nombre TEXT DEFAULT '',
-            fecha_registro TEXT NOT NULL
+            fecha_registro TEXT NOT NULL,
+            ultimo_login TEXT DEFAULT ''
         )
     """)
 
@@ -83,12 +117,23 @@ def crear_tablas():
         CREATE TABLE IF NOT EXISTS costos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            sku TEXT NOT NULL,
+            sku TEXT DEFAULT '',
             nombre_producto TEXT NOT NULL,
             costo_unitario REAL NOT NULL,
             categoria TEXT DEFAULT '',
             proveedor TEXT DEFAULT '',
             FOREIGN KEY (user_id) REFERENCES usuarios(id)
+        )
+    """)
+    
+    # --- INTENTOS DE LOGIN (control anti-fuerza bruta) ---
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            intentos INTEGER DEFAULT 0,
+            ultimo_intento TEXT,
+            bloqueado_hasta TEXT
         )
     """)
 
@@ -168,8 +213,14 @@ def crear_tablas_ml():
 # FUNCIONES DE USUARIO
 # ============================================================
 def _hash_password(password):
-    """Encripta password con SHA-256."""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Encripta password con bcrypt (estándar seguro)."""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def _es_hash_sha256(hash_str):
+    """Detecta si un hash es SHA-256 (64 caracteres hex) para migración."""
+    import hashlib
+    return len(hash_str) == 64 and all(c in '0123456789abcdef' for c in hash_str.lower())
 
 
 def crear_usuario(db, email, password, empresa="", nombre=""):
@@ -194,16 +245,150 @@ def crear_usuario(db, email, password, empresa="", nombre=""):
 
 
 def verificar_login(db, email, password):
-    """Verifica email y password.
-    Retorna el usuario si coincide, None si no."""
-    password_hash = _hash_password(password)
+    """Verifica email y password con bcrypt.
+    Controla intentos fallidos: 3 fallos = bloqueo 15 min.
+    Migra automáticamente usuarios con hash SHA-256 antiguo."""
+    import hashlib
+    
+    # 1. Verificar si está bloqueado
+    bloqueado, minutos = verificar_bloqueo(db, email)
+    if bloqueado:
+        return {"error": "bloqueado", "minutos": minutos}
+    
     cursor = db.cursor()
+    
+    # 2. Buscar usuario por email
     usuario = cursor.execute(
-        "SELECT id, email, empresa, nombre, fecha_registro FROM usuarios "
-        "WHERE email = ? AND password_hash = ?",
-        (email, password_hash),
+        "SELECT * FROM usuarios WHERE email = ?", (email,)
     ).fetchone()
-    return dict(usuario) if usuario else None
+    
+    if not usuario:
+        # Email no existe → registrar intento fallido igual
+        registrar_intento_fallido(db, email)
+        return None
+    
+    stored_hash = usuario["password_hash"]
+    password_bytes = password.encode()
+    login_ok = False
+    
+    # 3. Verificar password
+    if _es_hash_sha256(stored_hash):
+        if hashlib.sha256(password_bytes).hexdigest() == stored_hash:
+            login_ok = True
+            # Migrar a bcrypt
+            nuevo_hash = _hash_password(password)
+            cursor.execute(
+                "UPDATE usuarios SET password_hash = ? WHERE id = ?",
+                (nuevo_hash, usuario["id"]),
+            )
+            db.commit()
+    else:
+        if bcrypt.checkpw(password_bytes, stored_hash.encode()):
+            login_ok = True
+    
+    # 4. Gestionar intentos
+    if login_ok:
+        resetear_intentos(db, email)
+        # Guardar última conexión
+        ahora_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("UPDATE usuarios SET ultimo_login = ? WHERE id = ?",
+                       (ahora_str, usuario["id"]))
+        db.commit()
+        usuario = dict(usuario)
+        usuario["ultimo_login"] = ahora_str
+        return usuario
+    else:
+        registrar_intento_fallido(db, email)
+        # Verificar si con este fallo se bloqueó
+        bloqueado, minutos = verificar_bloqueo(db, email)
+        if bloqueado:
+            return {"error": "bloqueado", "minutos": minutos}
+        return None
+
+
+# ============================================================
+# CONTROL DE INTENTOS DE LOGIN (anti-fuerza bruta)
+# ============================================================
+def verificar_bloqueo(db, email):
+    """Revisa si un email está bloqueado por muchos intentos fallidos.
+    Retorna (bloqueado: bool, minutos_restantes: int)."""
+    from datetime import datetime
+    ahora = datetime.now()
+    
+    registro = db.execute(
+        "SELECT * FROM login_attempts WHERE email = ?", (email,)
+    ).fetchone()
+    
+    if not registro:
+        return False, 0  # Nunca ha intentado, no hay bloqueo
+    
+    bloqueado_hasta = registro["bloqueado_hasta"]
+    if not bloqueado_hasta:
+        return False, 0  # No está bloqueado
+    
+    try:
+        hasta = datetime.strptime(bloqueado_hasta, "%Y-%m-%d %H:%M:%S")
+        if ahora < hasta:
+            minutos = int((hasta - ahora).total_seconds() / 60)
+            return True, minutos + 1
+        else:
+            # Ya pasó el bloqueo, limpiar
+            db.execute("DELETE FROM login_attempts WHERE email = ?", (email,))
+            db.commit()
+            return False, 0
+    except:
+        return False, 0
+
+
+def registrar_intento_fallido(db, email):
+    """Registra un intento fallido. Si llega a 3, bloquea por 15 minutos."""
+    from datetime import datetime, timedelta
+    ahora = datetime.now()
+    ahora_str = ahora.strftime("%Y-%m-%d %H:%M:%S")
+    
+    registro = db.execute(
+        "SELECT * FROM login_attempts WHERE email = ?", (email,)
+    ).fetchone()
+    
+    if registro:
+        nuevos = registro["intentos"] + 1
+        if nuevos >= 3:
+            # Bloquear por 15 minutos
+            bloqueo = (ahora + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+            db.execute("""
+                UPDATE login_attempts 
+                SET intentos = ?, ultimo_intento = ?, bloqueado_hasta = ?
+                WHERE email = ?
+            """, (nuevos, ahora_str, bloqueo, email))
+        else:
+            db.execute("""
+                UPDATE login_attempts 
+                SET intentos = ?, ultimo_intento = ?
+                WHERE email = ?
+            """, (nuevos, ahora_str, email))
+    else:
+        db.execute("""
+            INSERT INTO login_attempts (email, intentos, ultimo_intento)
+            VALUES (?, 1, ?)
+        """, (email, ahora_str))
+    
+    db.commit()
+
+
+def resetear_intentos(db, email):
+    """Limpia los intentos fallidos tras un login exitoso."""
+    db.execute("DELETE FROM login_attempts WHERE email = ?", (email,))
+    db.commit()
+
+
+def obtener_intentos_restantes(db, email):
+    """Retorna cuántos intentos quedan antes del bloqueo."""
+    registro = db.execute(
+        "SELECT intentos FROM login_attempts WHERE email = ?", (email,)
+    ).fetchone()
+    if registro:
+        return max(0, 3 - registro["intentos"])
+    return 3  # Aún no ha fallado, tiene 3 intentos
 
 
 def obtener_usuario_por_id(db, user_id):
@@ -220,11 +405,14 @@ def obtener_usuario_por_id(db, user_id):
 # FUNCIONES DE TOKENS ML
 # ============================================================
 def guardar_token_ml(db, user_id, access_token, refresh_token, ml_user_id="", expires_at=""):
-    """Guarda o actualiza el token ML de un usuario."""
+    """Guarda o actualiza el token ML de un usuario (encriptado)."""
     ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor = db.cursor()
     
-    # Ver si ya existe un token para este usuario
+    # Encriptar tokens antes de guardar
+    enc_access = encrypt_token(access_token)
+    enc_refresh = encrypt_token(refresh_token)
+    
     existe = cursor.execute(
         "SELECT id FROM tokens_ml WHERE user_id = ?", (user_id,)
     ).fetchone()
@@ -235,24 +423,32 @@ def guardar_token_ml(db, user_id, access_token, refresh_token, ml_user_id="", ex
             SET access_token = ?, refresh_token = ?, ml_user_id = ?,
                 expires_at = ?, actualizado_en = ?
             WHERE user_id = ?
-        """, (access_token, refresh_token, ml_user_id, expires_at, ahora, user_id))
+        """, (enc_access, enc_refresh, ml_user_id, expires_at, ahora, user_id))
     else:
         cursor.execute("""
             INSERT INTO tokens_ml 
             (user_id, access_token, refresh_token, ml_user_id, expires_at, creado_en, actualizado_en)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, access_token, refresh_token, ml_user_id, expires_at, ahora, ahora))
+        """, (user_id, enc_access, enc_refresh, ml_user_id, expires_at, ahora, ahora))
     
     db.commit()
 
 
 def obtener_token_ml(db, user_id):
-    """Obtiene el token ML de un usuario."""
+    """Obtiene el token ML de un usuario (desencriptado)."""
     cursor = db.cursor()
     token = cursor.execute(
         "SELECT * FROM tokens_ml WHERE user_id = ?", (user_id,)
     ).fetchone()
-    return dict(token) if token else None
+    
+    if not token:
+        return None
+    
+    token = dict(token)
+    # Desencriptar tokens al leer
+    token["access_token"] = decrypt_token(token.get("access_token", ""))
+    token["refresh_token"] = decrypt_token(token.get("refresh_token", ""))
+    return token
 
 
 # ============================================================

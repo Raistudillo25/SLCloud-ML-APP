@@ -22,7 +22,8 @@ import os
 import sys
 import io
 import time
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 
 # ============================================================
 # CONFIGURACION INICIAL
@@ -352,13 +353,18 @@ def pagina_login():
                     st.error("Completa todos los campos")
                 else:
                     db = get_db()
-                    usuario = verificar_login(db, email, password)
+                    resultado = verificar_login(db, email, password)
                     db.close()
-                    if usuario:
-                        st.session_state["usuario"] = usuario
-                        st.rerun()
-                    else:
+                    
+                    if resultado is None:
                         st.error("Email o contraseña incorrectos")
+                    elif isinstance(resultado, dict) and resultado.get("error") == "bloqueado":
+                        mins = resultado.get("minutos", 15)
+                        st.error(f"🚫 Demasiados intentos fallidos. Cuenta bloqueada por {mins} minutos.")
+                        st.caption(f"Intenta de nuevo en {mins} minutos.")
+                    else:
+                        st.session_state["usuario"] = resultado
+                        st.rerun()
     
     with tab2:
         st.markdown('<h1>Crear Cuenta</h1><p class="subtitle">Registra tu empresa para empezar</p>', unsafe_allow_html=True)
@@ -369,7 +375,7 @@ def pagina_login():
             with col2:
                 nombre = st.text_input("Tu nombre", placeholder="Ej: Juan Pérez")
             email_reg = st.text_input("Email", placeholder="tu@correo.cl")
-            pass_reg = st.text_input("Contraseña", type="password", placeholder="Mínimo 6 caracteres")
+            pass_reg = st.text_input("Contraseña", type="password", placeholder="Mínimo 8 caracteres, 1 mayúscula, 1 número")
             pass_confirm = st.text_input("Repetir contraseña", type="password")
             
             if st.form_submit_button("Crear Cuenta", type="primary"):
@@ -377,8 +383,12 @@ def pagina_login():
                     st.error("Completa todos los campos")
                 elif pass_reg != pass_confirm:
                     st.error("Las contraseñas no coinciden")
-                elif len(pass_reg) < 6:
-                    st.error("La contraseña debe tener al menos 6 caracteres")
+                elif len(pass_reg) < 8:
+                    st.error("La contraseña debe tener al menos 8 caracteres")
+                elif not re.search(r'[A-Z]', pass_reg):
+                    st.error("La contraseña debe tener al menos 1 mayúscula")
+                elif not re.search(r'[0-9]', pass_reg):
+                    st.error("La contraseña debe tener al menos 1 número")
                 elif "@" not in email_reg:
                     st.error("Ingresa un email válido")
                 else:
@@ -821,6 +831,16 @@ def seccion_dashboard(usuario):
 def pagina_dashboard():
     usuario = st.session_state["usuario"]
     
+    # ─── AUTO-LOGOUT POR INACTIVIDAD (30 min) ───
+    ahora = datetime.now()
+    ultima_actividad = st.session_state.get("ultima_actividad")
+    if ultima_actividad:
+        if (ahora - ultima_actividad) > timedelta(minutes=30):
+            del st.session_state["usuario"]
+            st.warning("⏰ Sesión expirada por inactividad. Vuelve a iniciar sesión.")
+            st.rerun()
+    st.session_state["ultima_actividad"] = ahora
+    
     # ─── BARRA SUPERIOR ───
     col_logo, col_user, col_logout = st.columns([3, 2, 1])
     with col_logo:
@@ -835,6 +855,13 @@ def pagina_dashboard():
     st.divider()
     st.title(f"📊 {usuario['empresa']}")
     st.caption("Tu utilidad real en MercadoLibre — costos, comisiones y margen por producto")
+    
+    # ─── BARRA DE INFORMACION ───
+    ultimo = usuario.get("ultimo_login", "")
+    if ultimo:
+        st.caption(f"👤 {usuario['nombre']} | 📧 {usuario['email']} | 🕐 Última conexión: {ultimo}")
+    else:
+        st.caption(f"👤 {usuario['nombre']} | 📧 {usuario['email']}")
     
     # ─── TABS DEL DASHBOARD ───
     tab_ml, tab_sync, tab_costos, tab_dash = st.tabs([
