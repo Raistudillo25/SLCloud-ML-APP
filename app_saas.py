@@ -63,7 +63,7 @@ crear_tablas_ml()
 # ============================================================
 ML_CLIENT_ID = "1879547931760449"
 ML_CLIENT_SECRET = "z1icamOFSIagMoEusORZ9cA2nud10pq2"
-ML_REDIRECT_URI = "https://grupoastum.netlify.app/"
+ML_REDIRECT_URI = "https://raistudillo25.github.io/astum-ml-auth/"
 
 # ============================================================
 # FUNCIONES DE TOKEN ML
@@ -339,6 +339,11 @@ def pagina_login():
     
     with tab1:
         st.markdown('<h1>Bienvenido</h1><p class="subtitle">Ingresa con tu cuenta</p>', unsafe_allow_html=True)
+        
+        # Mostrar mensaje si viene de registro exitoso
+        if st.session_state.pop("registro_exitoso", None):
+            st.success(f"✅ Cuenta creada para {st.session_state.pop('empresa_registrada', '')}! Ahora inicia sesión.")
+        
         with st.form("form_login"):
             email = st.text_input("Email", placeholder="ejemplo@correo.cl")
             password = st.text_input("Contraseña", type="password", placeholder="••••••")
@@ -381,7 +386,10 @@ def pagina_login():
                     usuario = crear_usuario(db, email_reg, pass_reg, empresa, nombre)
                     db.close()
                     if usuario:
-                        st.success(f"✅ Cuenta creada para {empresa}! Ahora inicia sesión.")
+                        # Guardar datos para mostrar en login
+                        st.session_state["registro_exitoso"] = True
+                        st.session_state["empresa_registrada"] = empresa
+                        st.rerun()
                     else:
                         st.error("❌ Ese email ya está registrado.")
     
