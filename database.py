@@ -25,25 +25,25 @@ import psycopg2
 # o de un archivo .env en desarrollo local.
 
 def _build_conn_string():
-    """Construye el string de conexión desde variables de entorno."""
-    # En Streamlit Cloud, las pones en Settings → Secrets
-    # En local, se leen de os.environ o de .env
-    host = os.environ.get("SUPABASE_HOST", "")
-    port = os.environ.get("SUPABASE_PORT", "5432")
-    dbname = os.environ.get("SUPABASE_DB", "postgres")
-    user = os.environ.get("SUPABASE_USER", "postgres")
-    password = os.environ.get("SUPABASE_PASSWORD", "")
+    """Construye parametros de conexión."""
+    host = os.environ.get("NEON_HOST", "")
+    port = os.environ.get("NEON_PORT", "5432")
+    dbname = os.environ.get("NEON_DB", "")
+    user = os.environ.get("NEON_USER", "")
+    password = os.environ.get("NEON_PASSWORD", "")
 
-    # Si hay variables de entorno (Streamlit Cloud), armar URI
+    # Si hay variables de entorno (Streamlit Cloud), usarlas
     if host:
-        from urllib.parse import quote
-        safe_pw = quote(password, safe="")
-        return f"postgresql://{user}:***@{host}:{port}/{dbname}?sslmode=require"
+        return {"host": host, "port": port, "dbname": dbname, "user": user, "password": password}
 
-    # Fallback: Neon PostgreSQL para desarrollo local
-    from urllib.parse import quote
-    neon_pw = quote("npg_hYvVGW4M8zFq", safe="")
-    return f"postgresql://neondb_owner:***@ep-empty-wave-acte1y5q.sa-east-1.aws.neon.tech/neondb?sslmode=require"
+    # Fallback: Neon para desarrollo local (parametros separados)
+    return {
+        "host": "ep-empty-wave-acte1y5q.sa-east-1.aws.neon.tech",
+        "port": "5432",
+        "dbname": "neondb",
+        "user": "neondb_owner",
+        "password": "npg_hYvVGW4M8zFq"
+    }
 
 import bcrypt
 
@@ -82,18 +82,19 @@ def decrypt_token(encrypted_text):
 # CONEXION
 # ============================================================
 def get_db():
-    """Abre conexion a PostgreSQL (Supabase).
+    """Abre conexion a PostgreSQL (Neon).
     Siempre llama a esta funcion, no crees conexiones directas."""
     import psycopg2
     from psycopg2.extras import RealDictCursor
-    conn_str = _build_conn_string()
-    # Debug: loguear el string (sin password) para diagnosticar
-    import re
-    safe_log = re.sub(r'://[^:]+:[^@]+@', '://***:***@', conn_str)
-    print(f"[DB] Conectando a: {safe_log}")
+    params = _build_conn_string()
+    # Debug: loguear sin password
+    safe = {k: (v if k != "password" else "***") for k, v in params.items()}
+    print(f"[DB] Conectando a: {safe}")
     conn = psycopg2.connect(
-        conn_str,
-        cursor_factory=RealDictCursor
+        **params,
+        cursor_factory=RealDictCursor,
+        sslmode="require",
+        connect_timeout=15
     )
     return conn
 
