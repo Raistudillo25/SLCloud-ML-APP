@@ -34,16 +34,12 @@ def _build_conn_string():
     user = os.environ.get("SUPABASE_USER", "postgres")
     password = os.environ.get("SUPABASE_PASSWORD", "")
 
-    # Si no hay variables de entorno, usar valores directos (fallback)
+    # Si no hay variables de entorno, usar valores directos (fallback para desarrollo local)
     if not host:
-        host = "db.xrmbtpdyupfkgzbopibk.supabase.co"
-        dbname = "postgres"
-        user = "postgres"
-        password = "Totito2504."
-
-    # URI con sslmode=require (obligatorio para Supabase)
-    # El URI evade problemas de IPv6 en Streamlit Cloud
-    return f"postgresql://{user}:{password}@{host}:{port}/{dbname}?sslmode=require"
+        # Neon PostgreSQL — password codificado para URL seguro
+        from urllib.parse import quote
+        neon_pw = quote("npg_mtPZ6nQTx4qI", safe="")
+        return f"postgresql://neondb_owner:{neon_pw}@ep-empty-wave-acte1y5q.sa-east-1.aws.neon.tech/neondb?sslmode=require"
 
 import bcrypt
 
