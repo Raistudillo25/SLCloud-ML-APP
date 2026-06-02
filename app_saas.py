@@ -71,6 +71,11 @@ ML_CLIENT_SECRET = "z1icamOFSIagMoEusORZ9cA2nud10pq2"
 ML_REDIRECT_URI = "https://raistudillo25.github.io/astum-ml-auth/"
 
 # ============================================================
+# EMALES DE ADMINISTRADORES (protegidos de eliminación)
+# ============================================================
+ADMIN_EMAILS = ["ricardoaistudillo@gmail.com"]
+
+# ============================================================
 # FUNCIONES DE TOKEN ML
 # ============================================================
 def generar_url_autorizacion():
@@ -872,7 +877,7 @@ def pagina_dashboard():
     
     # Agregar pestaña de admin si el email es el admin
     ADMIN_EMAILS = ["ricardoaistudillo@gmail.com"]
-    if usuario.get("email", "").lower() in ADMIN_EMAILS:
+    if usuario.get("email", "").lower() in [e.lower() for e in ADMIN_EMAILS]:
         tabs.append("🔒 Admin")
     
     dashboard_tabs = st.tabs(tabs)
@@ -928,11 +933,12 @@ def seccion_admin(usuario):
         if not lista:
             st.info("No hay usuarios registrados.")
         else:
-            # Seleccionar todos / deseleccionar
+            # Seleccionar todos / deseleccionar (solo no-admins)
             col_sel, col_del = st.columns([2, 1])
             if col_sel.button("✅ Seleccionar todos"):
                 for u in lista:
-                    st.session_state[f"sel_{u['id']}"] = True
+                    if u['email'].lower() not in [a.lower() for a in ADMIN_EMAILS]:
+                        st.session_state[f"sel_{u['id']}"] = True
                 st.rerun()
             
             if col_del.button("❌ Deseleccionar todos"):
@@ -940,7 +946,7 @@ def seccion_admin(usuario):
                     st.session_state.pop(f"sel_{u['id']}", None)
                 st.rerun()
             
-            # Contar seleccionados
+            # Contar seleccionados (excluyendo admins)
             seleccionados = [u for u in lista if st.session_state.get(f"sel_{u['id']}", False)]
             
             if seleccionados:
@@ -951,7 +957,6 @@ def seccion_admin(usuario):
                         admin_eliminar_usuario(db, u['id'])
                         eliminados += 1
                     st.success(f"✅ {eliminados} usuario(s) eliminado(s) correctamente.")
-                    # Limpiar selecciones
                     for u in lista:
                         st.session_state.pop(f"sel_{u['id']}", None)
                     st.rerun()
@@ -959,13 +964,21 @@ def seccion_admin(usuario):
             
             # Lista con checkboxes
             for u in lista:
+                es_admin = u['email'].lower() in [a.lower() for a in ADMIN_EMAILS]
                 cols = st.columns([0.5, 3, 3, 2, 2])
-                checked = cols[0].checkbox(
-                    "",
-                    key=f"sel_{u['id']}",
-                    label_visibility="collapsed"
-                )
-                cols[1].write(f"**{u['empresa']}**" if u['empresa'] else "*Sin empresa*")
+                # Checkbox deshabilitado para admins
+                if es_admin:
+                    cols[0].write("🔒")
+                else:
+                    cols[0].checkbox(
+                        "",
+                        key=f"sel_{u['id']}",
+                        label_visibility="collapsed"
+                    )
+                nombre = f"**{u['empresa']}**" if u['empresa'] else "*Sin empresa*"
+                if es_admin:
+                    nombre += " 🛡️"
+                cols[1].write(nombre)
                 cols[2].write(u['email'])
                 cols[3].write(u['fecha_registro'][:10] if u['fecha_registro'] else "-")
                 ultimo = u.get("ultimo_login", "")
