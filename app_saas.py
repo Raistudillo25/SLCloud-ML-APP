@@ -41,6 +41,7 @@ st.set_page_config(
 sys.path.insert(0, os.path.dirname(__file__))
 from database import (
     get_db,
+    close_db,
     crear_tablas,
     crear_tablas_ml,
     crear_usuario,
@@ -858,6 +859,7 @@ def pagina_dashboard():
         st.markdown(f'<div style="text-align:right;color:#8899aa;padding-top:8px;">👤 {usuario["empresa"]} <span style="color:#555;">|</span> <span style="color:#4a8fe0;">{usuario["email"]}</span></div>', unsafe_allow_html=True)
     with col_logout:
         if st.button("🚪 Cerrar Sesión", use_container_width=True):
+            close_db()
             del st.session_state["usuario"]
             st.rerun()
     

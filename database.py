@@ -78,25 +78,39 @@ def decrypt_token(encrypted_text):
     except Exception:
         return ""
 
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
 # ============================================================
-# CONEXION
+# POOL DE CONEXIONES SIMPLE
 # ============================================================
+_db_conn = None
+
+def _get_cached_conn():
+    """Reutiliza la conexión a BD abierta para evitar reconexiones lentas."""
+    global _db_conn
+    if _db_conn is None or _db_conn.closed:
+        params = _build_conn_string()
+        _db_conn = psycopg2.connect(
+            **params,
+            cursor_factory=RealDictCursor,
+            sslmode="require",
+            connect_timeout=15
+        )
+    return _db_conn
+
+
 def get_db():
-    """Abre conexion a PostgreSQL (Neon).
-    Siempre llama a esta funcion, no crees conexiones directas."""
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    params = _build_conn_string()
-    # Debug: loguear sin password
-    safe = {k: (v if k != "password" else "***") for k, v in params.items()}
-    print(f"[DB] Conectando a: {safe}")
-    conn = psycopg2.connect(
-        **params,
-        cursor_factory=RealDictCursor,
-        sslmode="require",
-        connect_timeout=15
-    )
-    return conn
+    """Obtiene conexión a PostgreSQL (con caché para evitar reconexiones)."""
+    return _get_cached_conn()
+
+
+def close_db():
+    """Cierra la conexión global (llamar al cerrar sesión)."""
+    global _db_conn
+    if _db_conn and not _db_conn.closed:
+        _db_conn.close()
+        _db_conn = None
 
 
 # ============================================================
