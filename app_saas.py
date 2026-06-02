@@ -336,22 +336,15 @@ def pagina_login():
     st.markdown('<div class="logo-astum">ASTUM <small>MERCADOLIBRE ANALYTICS</small></div>', unsafe_allow_html=True)
     st.markdown('<div class="card-login">', unsafe_allow_html=True)
     
-    # Determinar qué pestaña mostrar por defecto
-    tab_index = 1 if st.session_state.pop("ir_a_login", None) else 0
-    tab_titles = ["🔑 Iniciar Sesión", "📝 Crear Cuenta"]
-    
-    # Mostrar mensaje de éxito de registro (si viene de crear cuenta)
-    registro_msg = st.session_state.pop("registro_exitoso", None)
-    empresa_msg = st.session_state.pop("empresa_registrada", "")
-    
-    tab1, tab2 = st.tabs(tab_titles)
+    tab1, tab2 = st.tabs(["🔑 Iniciar Sesión", "📝 Crear Cuenta"])
     
     with tab1:
-        # Mensaje de éxito de registro
-        if registro_msg:
-            st.success(f"✅ Cuenta creada para {empresa_msg}! Ahora inicia sesión.")
-        
         st.markdown('<h1>Bienvenido</h1><p class="subtitle">Ingresa con tu cuenta</p>', unsafe_allow_html=True)
+        
+        # Mensaje de éxito de registro (mostrar ANTES del formulario)
+        if st.session_state.pop("registro_exitoso", None):
+            empresa_reg = st.session_state.pop("empresa_registrada", "")
+            st.success(f"✅ Cuenta creada para {empresa_reg}! Ahora inicia sesión.")
         
         with st.form("form_login"):
             email = st.text_input("Email", placeholder="ejemplo@correo.cl")
@@ -388,7 +381,7 @@ def pagina_login():
             email_reg = st.text_input("Email", placeholder="tu@correo.cl")
             pass_reg = st.text_input("Contraseña", type="password", placeholder="Mínimo 8 caracteres, 1 mayúscula, 1 número")
             pass_confirm = st.text_input("Repetir contraseña", type="password")
-            submitted_reg = st.form_submit_button("Cuenta", type="primary")
+            submitted_reg = st.form_submit_button("Crear Cuenta", type="primary")
         
         if submitted_reg:
             if not all([empresa, nombre, email_reg, pass_reg, pass_confirm]):
@@ -410,7 +403,6 @@ def pagina_login():
                     if usuario:
                         st.session_state["registro_exitoso"] = True
                         st.session_state["empresa_registrada"] = empresa
-                        st.session_state["ir_a_login"] = True
                         st.rerun()
                     else:
                         st.error("❌ Ese email ya está registrado.")
