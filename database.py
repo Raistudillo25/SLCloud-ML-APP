@@ -407,10 +407,11 @@ def obtener_intentos_restantes(db, email):
 def obtener_usuario_por_id(db, user_id):
     """Obtiene datos de un usuario por su ID."""
     cursor = db.cursor()
-    usuario = cursor.execute(
+    cursor.execute(
         "SELECT id, email, empresa, nombre, fecha_registro FROM usuarios WHERE id = %s",
         (user_id,),
-    ).fetchone()
+    )
+    usuario = cursor.fetchone()
     return dict(usuario) if usuario else None
 
 
@@ -425,10 +426,10 @@ def guardar_token_ml(db, user_id, access_token, refresh_token, ml_user_id="", ex
     # Encriptar tokens antes de guardar
     enc_access = encrypt_token(access_token)
     enc_refresh = encrypt_token(refresh_token)
-    
-    existe = cursor.execute(
+    cursor.execute(
         "SELECT id FROM tokens_ml WHERE user_id = %s", (user_id,)
-    ).fetchone()
+    )
+    existe = cursor.fetchone()
     
     if existe:
         cursor.execute("""
@@ -450,9 +451,10 @@ def guardar_token_ml(db, user_id, access_token, refresh_token, ml_user_id="", ex
 def obtener_token_ml(db, user_id):
     """Obtiene el token ML de un usuario (desencriptado)."""
     cursor = db.cursor()
-    token = cursor.execute(
+    cursor.execute(
         "SELECT * FROM tokens_ml WHERE user_id = %s", (user_id,)
-    ).fetchone()
+    )
+    token = cursor.fetchone()
     
     if not token:
         return None
@@ -494,10 +496,11 @@ def guardar_costos(db, user_id, df_costos):
 def obtener_costos_usuario(db, user_id):
     """Obtiene los costos de un usuario como lista de diccionarios."""
     cursor = db.cursor()
-    filas = cursor.execute(
+    cursor.execute(
         "SELECT sku, nombre_producto, costo_unitario, categoria, proveedor FROM costos WHERE user_id = %s",
         (user_id,),
-    ).fetchall()
+    )
+    filas = cursor.fetchall()
     return [dict(f) for f in filas]
 
 
@@ -536,10 +539,11 @@ def guardar_productos_ml(db, user_id, productos):
 def obtener_productos_ml(db, user_id):
     """Obtiene los productos ML guardados de un usuario."""
     cursor = db.cursor()
-    filas = cursor.execute(
+    cursor.execute(
         "SELECT * FROM productos_ml WHERE user_id = %s ORDER BY title",
         (user_id,),
-    ).fetchall()
+    )
+    filas = cursor.fetchall()
     return [dict(f) for f in filas]
 
 
@@ -577,18 +581,20 @@ def guardar_ventas_ml(db, user_id, ventas):
 def obtener_ventas_ml(db, user_id):
     """Obtiene las ventas ML guardadas de un usuario."""
     cursor = db.cursor()
-    filas = cursor.execute(
+    cursor.execute(
         "SELECT * FROM ventas_ml WHERE user_id = %s ORDER BY date_created DESC",
         (user_id,),
-    ).fetchall()
+    )
+    filas = cursor.fetchall()
     return [dict(f) for f in filas]
 
 
 def ultima_sincronizacion(db, user_id):
     """Obtiene la fecha de la ultima sincronizacion."""
     cursor = db.cursor()
-    result = cursor.execute(
+    cursor.execute(
         "SELECT MAX(sincronizado_en) as ultima FROM productos_ml WHERE user_id = %s",
         (user_id,),
-    ).fetchone()
+    )
+    result = cursor.fetchone()
     return result["ultima"] if result and result["ultima"] else None
