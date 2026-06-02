@@ -341,11 +341,6 @@ def pagina_login():
     with tab1:
         st.markdown('<h1>Bienvenido</h1><p class="subtitle">Ingresa con tu cuenta</p>', unsafe_allow_html=True)
         
-        # Mensaje de éxito de registro (mostrar ANTES del formulario)
-        if st.session_state.pop("registro_exitoso", None):
-            empresa_reg = st.session_state.pop("empresa_registrada", "")
-            st.success(f"✅ Cuenta creada para {empresa_reg}! Ahora inicia sesión.")
-        
         with st.form("form_login"):
             email = st.text_input("Email", placeholder="ejemplo@correo.cl")
             password = st.text_input("Contraseña", type="password", placeholder="••••••")
@@ -401,9 +396,8 @@ def pagina_login():
                     db = get_db()
                     usuario = crear_usuario(db, email_reg, pass_reg, empresa, nombre)
                     if usuario:
-                        st.session_state["registro_exitoso"] = True
-                        st.session_state["empresa_registrada"] = empresa
-                        st.rerun()
+                        st.success(f"✅ Cuenta creada para {empresa}! Ahora podés iniciar sesión.")
+                        st.info("👆 Andá a la pestaña 'Iniciar Sesión' para ingresar.")
                     else:
                         st.error("❌ Ese email ya está registrado.")
                 finally:
