@@ -34,12 +34,16 @@ def _build_conn_string():
     user = os.environ.get("SUPABASE_USER", "postgres")
     password = os.environ.get("SUPABASE_PASSWORD", "")
 
-    # Si no hay variables de entorno, usar valores directos (fallback para desarrollo local)
-    if not host:
-        # Neon PostgreSQL — password codificado para URL seguro
+    # Si hay variables de entorno (Streamlit Cloud), armar URI
+    if host:
         from urllib.parse import quote
-        neon_pw = quote("npg_mtPZ6nQTx4qI", safe="")
-        return f"postgresql://neondb_owner:{neon_pw}@ep-empty-wave-acte1y5q.sa-east-1.aws.neon.tech/neondb?sslmode=require"
+        safe_pw = quote(password, safe="")
+        return f"postgresql://{user}:***@{host}:{port}/{dbname}?sslmode=require"
+
+    # Fallback: Neon PostgreSQL para desarrollo local
+    from urllib.parse import quote
+    neon_pw = quote("npg_mtPZ6nQTx4qI", safe="")
+    return f"postgresql://neondb_owner:***@ep-empty-wave-acte1y5q.sa-east-1.aws.neon.tech/neondb?sslmode=require"
 
 import bcrypt
 
@@ -82,11 +86,15 @@ def get_db():
     Siempre llama a esta funcion, no crees conexiones directas."""
     import psycopg2
     from psycopg2.extras import RealDictCursor
+    conn_str = _build_conn_string()
+    # Debug: loguear el string (sin password) para diagnosticar
+    import re
+    safe_log = re.sub(r'://[^:]+:[^@]+@', '://***:***@', conn_str)
+    print(f"[DB] Conectando a: {safe_log}")
     conn = psycopg2.connect(
-        _build_conn_string(),
+        conn_str,
         cursor_factory=RealDictCursor
     )
-    conn.autocommit = False
     return conn
 
 
