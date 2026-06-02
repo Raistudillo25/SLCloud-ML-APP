@@ -42,7 +42,7 @@ def _build_conn_string():
 
     # Fallback: Neon PostgreSQL para desarrollo local
     from urllib.parse import quote
-    neon_pw = quote("npg_mtPZ6nQTx4qI", safe="")
+    neon_pw = quote("npg_hYvVGW4M8zFq", safe="")
     return f"postgresql://neondb_owner:***@ep-empty-wave-acte1y5q.sa-east-1.aws.neon.tech/neondb?sslmode=require"
 
 import bcrypt
