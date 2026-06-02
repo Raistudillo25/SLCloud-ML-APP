@@ -598,3 +598,63 @@ def ultima_sincronizacion(db, user_id):
     )
     result = cursor.fetchone()
     return result["ultima"] if result and result["ultima"] else None
+
+
+# ============================================================
+# FUNCIONES DE ADMINISTRACIÓN
+# ============================================================
+def admin_listar_usuarios(db):
+    """Lista todos los usuarios registrados (para panel de admin)."""
+    cursor = db.cursor()
+    cursor.execute("""
+        SELECT id, email, empresa, nombre, fecha_registro, ultimo_login
+        FROM usuarios
+        ORDER BY id
+    """)
+    filas = cursor.fetchall()
+    return [dict(f) for f in filas]
+
+
+def admin_eliminar_usuario(db, user_id):
+    """Elimina un usuario y todos sus datos asociados."""
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM login_attempts WHERE email = (SELECT email FROM usuarios WHERE id = %s)", (user_id,))
+    cursor.execute("DELETE FROM tokens_ml WHERE user_id = %s", (user_id,))
+    cursor.execute("DELETE FROM costos WHERE user_id = %s", (user_id,))
+    cursor.execute("DELETE FROM productos_ml WHERE user_id = %s", (user_id,))
+    cursor.execute("DELETE FROM ventas_ml WHERE user_id = %s", (user_id,))
+    cursor.execute("DELETE FROM usuarios WHERE id = %s", (user_id,))
+    db.commit()
+    return True
+
+
+def admin_resetear_intentos(db, email):
+    """Resetea los intentos fallidos de un usuario."""
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM login_attempts WHERE email = %s", (email,))
+    db.commit()
+    return True
+
+
+def admin_obtener_stats(db):
+    """Obtiene estadísticas generales del sistema."""
+    cursor = db.cursor()
+    
+    cursor.execute("SELECT COUNT(*) as total FROM usuarios")
+    total_usuarios = cursor.fetchone()["total"]
+    
+    cursor.execute("SELECT COUNT(*) as total FROM tokens_ml")
+    total_conectados = cursor.fetchone()["total"]
+    
+    cursor.execute("SELECT COUNT(*) as total FROM productos_ml")
+    total_productos = cursor.fetchone()["total"]
+    
+    cursor.execute("SELECT COUNT(*) as total FROM ventas_ml")
+    total_ventas = cursor.fetchone()["total"]
+    
+    return {
+        "usuarios": total_usuarios,
+        "conectados": total_conectados,
+        "productos": total_productos,
+        "ventas": total_ventas
+    }

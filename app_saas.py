@@ -54,6 +54,10 @@ from database import (
     guardar_ventas_ml,
     obtener_ventas_ml,
     ultima_sincronizacion,
+    admin_listar_usuarios,
+    admin_eliminar_usuario,
+    admin_resetear_intentos,
+    admin_obtener_stats,
 )
 
 crear_tablas()
@@ -864,12 +868,19 @@ def pagina_dashboard():
         st.caption(f"👤 {usuario['nombre']} | 📧 {usuario['email']}")
     
     # ─── TABS DEL DASHBOARD ───
-    tab_ml, tab_sync, tab_costos, tab_dash = st.tabs([
-        "🔗 Conectar ML",
-        "🔄 Sincronizar",
-        "💰 Mis Costos",
-        "📊 Dashboard",
-    ])
+    tabs = ["🔗 Conectar ML", "🔄 Sincronizar", "💰 Mis Costos", "📊 Dashboard"]
+    
+    # Agregar pestaña de admin si el email es el admin
+    ADMIN_EMAILS = ["tech@astumgroup.cl", "contacto@astumgroup.cl", "admin@astumgroup.cl"]
+    if usuario.get("email", "").lower() in ADMIN_EMAILS:
+        tabs.append("🔒 Admin")
+    
+    dashboard_tabs = st.tabs(tabs)
+    tab_ml = dashboard_tabs[0]
+    tab_sync = dashboard_tabs[1]
+    tab_costos = dashboard_tabs[2]
+    tab_dash = dashboard_tabs[3]
+    tab_admin = dashboard_tabs[4] if len(dashboard_tabs) > 4 else None
     
     with tab_ml:
         seccion_conexion_ml(usuario)
@@ -883,8 +894,59 @@ def pagina_dashboard():
     with tab_dash:
         seccion_dashboard(usuario)
     
+    if tab_admin:
+        with tab_admin:
+            seccion_admin(usuario)
+    
     st.divider()
     st.markdown('<div class="footer-saas">ASTUM Group © 2026 | AstumGroup.cl | contacto@astumgroup.cl</div>', unsafe_allow_html=True)
+
+
+# ============================================================
+# SECCIÓN DE ADMINISTRACIÓN
+# ============================================================
+def seccion_admin(usuario):
+    st.subheader("🔒 Panel de Administración")
+    
+    try:
+        db = get_db()
+        
+        # ─── ESTADÍSTICAS ───
+        stats = admin_obtener_stats(db)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("👥 Usuarios", stats["usuarios"])
+        c2.metric("🔗 Conectados ML", stats["conectados"])
+        c3.metric("📦 Productos", stats["productos"])
+        c4.metric("🛒 Ventas", stats["ventas"])
+        
+        st.divider()
+        
+        # ─── LISTA DE USUARIOS ───
+        st.markdown("#### 👥 Usuarios registrados")
+        lista = admin_listar_usuarios(db)
+        
+        if not lista:
+            st.info("No hay usuarios registrados.")
+        else:
+            for u in lista:
+                cols = st.columns([3, 3, 2, 2, 1])
+                cols[0].write(f"**{u['empresa']}**" if u['empresa'] else "*Sin empresa*")
+                cols[1].write(u['email'])
+                cols[2].write(u['fecha_registro'][:10] if u['fecha_registro'] else "-")
+                ultimo = u.get("ultimo_login", "")
+                cols[3].write(ultimo[:10] if ultimo else "Nunca")
+                if cols[4].button("🗑️", key=f"del_{u['id']}"):
+                    admin_eliminar_usuario(db, u['id'])
+                    st.success(f"✅ Usuario {u['email']} eliminado.")
+                    st.rerun()
+        
+        db.close()
+    except Exception as e:
+        st.error(f"Error: {e}")
+        try:
+            db.close()
+        except:
+            pass
 
 
 # ============================================================
