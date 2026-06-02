@@ -336,26 +336,35 @@ def pagina_login():
     st.markdown('<div class="logo-astum">ASTUM <small>MERCADOLIBRE ANALYTICS</small></div>', unsafe_allow_html=True)
     st.markdown('<div class="card-login">', unsafe_allow_html=True)
     
-    tab1, tab2 = st.tabs(["🔑 Iniciar Sesión", "📝 Crear Cuenta"])
+    # Determinar qué pestaña mostrar por defecto
+    tab_index = 1 if st.session_state.pop("ir_a_login", None) else 0
+    tab_titles = ["🔑 Iniciar Sesión", "📝 Crear Cuenta"]
+    
+    # Mostrar mensaje de éxito de registro (si viene de crear cuenta)
+    registro_msg = st.session_state.pop("registro_exitoso", None)
+    empresa_msg = st.session_state.pop("empresa_registrada", "")
+    
+    tab1, tab2 = st.tabs(tab_titles)
     
     with tab1:
-        st.markdown('<h1>Bienvenido</h1><p class="subtitle">Ingresa con tu cuenta</p>', unsafe_allow_html=True)
+        # Mensaje de éxito de registro
+        if registro_msg:
+            st.success(f"✅ Cuenta creada para {empresa_msg}! Ahora inicia sesión.")
         
-        # Mostrar mensaje si viene de registro exitoso
-        if st.session_state.pop("registro_exitoso", None):
-            st.success(f"✅ Cuenta creada para {st.session_state.pop('empresa_registrada', '')}! Ahora inicia sesión.")
+        st.markdown('<h1>Bienvenido</h1><p class="subtitle">Ingresa con tu cuenta</p>', unsafe_allow_html=True)
         
         with st.form("form_login"):
             email = st.text_input("Email", placeholder="ejemplo@correo.cl")
             password = st.text_input("Contraseña", type="password", placeholder="••••••")
-            if st.form_submit_button("Iniciar Sesión", type="primary"):
-                if not email or not password:
-                    st.error("Completa todos los campos")
-                else:
+            submitted = st.form_submit_button("Iniciar Sesión", type="primary")
+        
+        if submitted:
+            if not email or not password:
+                st.error("Completa todos los campos")
+            else:
+                try:
                     db = get_db()
                     resultado = verificar_login(db, email, password)
-                    db.close()
-                    
                     if resultado is None:
                         st.error("Email o contraseña incorrectos")
                     elif isinstance(resultado, dict) and resultado.get("error") == "bloqueado":
@@ -365,6 +374,8 @@ def pagina_login():
                     else:
                         st.session_state["usuario"] = resultado
                         st.rerun()
+                finally:
+                    db.close()
     
     with tab2:
         st.markdown('<h1>Crear Cuenta</h1><p class="subtitle">Registra tu empresa para empezar</p>', unsafe_allow_html=True)
@@ -377,31 +388,34 @@ def pagina_login():
             email_reg = st.text_input("Email", placeholder="tu@correo.cl")
             pass_reg = st.text_input("Contraseña", type="password", placeholder="Mínimo 8 caracteres, 1 mayúscula, 1 número")
             pass_confirm = st.text_input("Repetir contraseña", type="password")
-            
-            if st.form_submit_button("Crear Cuenta", type="primary"):
-                if not all([empresa, nombre, email_reg, pass_reg, pass_confirm]):
-                    st.error("Completa todos los campos")
-                elif pass_reg != pass_confirm:
-                    st.error("Las contraseñas no coinciden")
-                elif len(pass_reg) < 8:
-                    st.error("La contraseña debe tener al menos 8 caracteres")
-                elif not re.search(r'[A-Z]', pass_reg):
-                    st.error("La contraseña debe tener al menos 1 mayúscula")
-                elif not re.search(r'[0-9]', pass_reg):
-                    st.error("La contraseña debe tener al menos 1 número")
-                elif "@" not in email_reg:
-                    st.error("Ingresa un email válido")
-                else:
+            submitted_reg = st.form_submit_button("Cuenta", type="primary")
+        
+        if submitted_reg:
+            if not all([empresa, nombre, email_reg, pass_reg, pass_confirm]):
+                st.error("Completa todos los campos")
+            elif pass_reg != pass_confirm:
+                st.error("Las contraseñas no coinciden")
+            elif len(pass_reg) < 8:
+                st.error("La contraseña debe tener al menos 8 caracteres")
+            elif not re.search(r'[A-Z]', pass_reg):
+                st.error("La contraseña debe tener al menos 1 mayúscula")
+            elif not re.search(r'[0-9]', pass_reg):
+                st.error("La contraseña debe tener al menos 1 número")
+            elif "@" not in email_reg:
+                st.error("Ingresa un email válido")
+            else:
+                try:
                     db = get_db()
                     usuario = crear_usuario(db, email_reg, pass_reg, empresa, nombre)
-                    db.close()
                     if usuario:
-                        # Guardar datos para mostrar en login
                         st.session_state["registro_exitoso"] = True
                         st.session_state["empresa_registrada"] = empresa
+                        st.session_state["ir_a_login"] = True
                         st.rerun()
                     else:
                         st.error("❌ Ese email ya está registrado.")
+                finally:
+                    db.close()
     
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('<div class="footer-saas">ASTUM Group © 2026 — AstumGroup.cl</div>', unsafe_allow_html=True)
