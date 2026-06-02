@@ -928,17 +928,48 @@ def seccion_admin(usuario):
         if not lista:
             st.info("No hay usuarios registrados.")
         else:
-            for u in lista:
-                cols = st.columns([3, 3, 2, 2, 1])
-                cols[0].write(f"**{u['empresa']}**" if u['empresa'] else "*Sin empresa*")
-                cols[1].write(u['email'])
-                cols[2].write(u['fecha_registro'][:10] if u['fecha_registro'] else "-")
-                ultimo = u.get("ultimo_login", "")
-                cols[3].write(ultimo[:10] if ultimo else "Nunca")
-                if cols[4].button("🗑️", key=f"del_{u['id']}"):
-                    admin_eliminar_usuario(db, u['id'])
-                    st.success(f"✅ Usuario {u['email']} eliminado.")
+            # Seleccionar todos / deseleccionar
+            col_sel, col_del = st.columns([2, 1])
+            if col_sel.button("✅ Seleccionar todos"):
+                for u in lista:
+                    st.session_state[f"sel_{u['id']}"] = True
+                st.rerun()
+            
+            if col_del.button("❌ Deseleccionar todos"):
+                for u in lista:
+                    st.session_state.pop(f"sel_{u['id']}", None)
+                st.rerun()
+            
+            # Contar seleccionados
+            seleccionados = [u for u in lista if st.session_state.get(f"sel_{u['id']}", False)]
+            
+            if seleccionados:
+                st.info(f"📋 {len(seleccionados)} usuario(s) seleccionado(s)")
+                if st.button(f"🗑️ Eliminar {len(seleccionados)} usuario(s)", type="primary"):
+                    eliminados = 0
+                    for u in seleccionados:
+                        admin_eliminar_usuario(db, u['id'])
+                        eliminados += 1
+                    st.success(f"✅ {eliminados} usuario(s) eliminado(s) correctamente.")
+                    # Limpiar selecciones
+                    for u in lista:
+                        st.session_state.pop(f"sel_{u['id']}", None)
                     st.rerun()
+                st.divider()
+            
+            # Lista con checkboxes
+            for u in lista:
+                cols = st.columns([0.5, 3, 3, 2, 2])
+                checked = cols[0].checkbox(
+                    "",
+                    key=f"sel_{u['id']}",
+                    label_visibility="collapsed"
+                )
+                cols[1].write(f"**{u['empresa']}**" if u['empresa'] else "*Sin empresa*")
+                cols[2].write(u['email'])
+                cols[3].write(u['fecha_registro'][:10] if u['fecha_registro'] else "-")
+                ultimo = u.get("ultimo_login", "")
+                cols[4].write(ultimo[:10] if ultimo else "Nunca")
         
         db.close()
     except Exception as e:
