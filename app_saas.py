@@ -396,8 +396,8 @@ def pagina_login():
                     db = get_db()
                     usuario = crear_usuario(db, email_reg, pass_reg, empresa, nombre)
                     if usuario:
-                        st.success(f"✅ Cuenta creada para {empresa}! Ahora podés iniciar sesión.")
-                        st.info("👆 Andá a la pestaña 'Iniciar Sesión' para ingresar.")
+                        st.success(f"✅ Cuenta creada para {nombre}! Ahora puedes iniciar sesión.")
+                        st.info('👆 Haz click en la sección "Iniciar Sesión" para ingresar.')
                     else:
                         st.error("❌ Ese email ya está registrado.")
                 finally:
