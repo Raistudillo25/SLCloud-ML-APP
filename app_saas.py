@@ -871,7 +871,7 @@ def pagina_dashboard():
     tabs = ["🔗 Conectar ML", "🔄 Sincronizar", "💰 Mis Costos", "📊 Dashboard"]
     
     # Agregar pestaña de admin si el email es el admin
-    ADMIN_EMAILS = ["tech@astumgroup.cl", "contacto@astumgroup.cl", "admin@astumgroup.cl"]
+    ADMIN_EMAILS = ["ricardoaistudillo@gmail.com"]
     if usuario.get("email", "").lower() in ADMIN_EMAILS:
         tabs.append("🔒 Admin")
     
